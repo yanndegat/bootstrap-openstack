@@ -209,7 +209,7 @@ resource "openstack_networking_port_v2" "mgmt" {
 resource "openstack_compute_instance_v2" "nodes" {
   count       = "${length(var.nodes)}"
   name        = "${var.name}_${element(var.nodes, count.index)}"
-  image_name  = "Ubuntu 18.04"
+  image_name  = "Ubuntu 16.04"
   flavor_name = "${var.flavor_name}"
   key_pair    = "${openstack_compute_keypair_v2.keypair.name}"
   user_data   = "${data.template_file.nodes.rendered}"
@@ -277,7 +277,7 @@ CLOUDCONFIG
 
 resource "openstack_compute_instance_v2" "deployer" {
   name        = "${var.name}_deployer"
-  image_name  = "Ubuntu 18.04"
+  image_name  = "Ubuntu 16.04"
   flavor_name = "${var.flavor_name}"
   key_pair    = "${openstack_compute_keypair_v2.keypair.name}"
   user_data   = "${data.template_file.deployer.rendered}"
@@ -324,30 +324,3 @@ resource "null_resource" "provision" {
     ]
   }
 }
-
-
-resource "null_resource" "configure" {
-
-  connection {
-    type = "ssh"
-    host = "${openstack_compute_instance_v2.nodes..access_ip_v4}"
-    user = "ubuntu"
-  }
-
-  provisioner "remote-exec" {
-    inline = [
-      # Source helper functions
-      "sudo -u keystone",
-      "source helper",
-
-      # Following actions are done as admin
-      "source openrc_admin",
-      "create_flavors",
-      "create_image_cirros",
-      "create_image_ubuntu",
-      # Before running this one, update the function in helper and source it again to ajust with your network settings
-      "create_network_public"
-    ]
-  }
-}
-
