@@ -79,15 +79,15 @@ https://www.ovh.com/fr/support/new_nic.xml
 
 ## Create a cloud project
 
-![Create cloud project](data/create_cloud.gif "Create cloud project")
+![Create cloud project](img/create_cloud.gif "Create cloud project")
 
 ## Activate vRack on your cloud project
 
-![Enable vRack](data/enable_vrack.gif "Enable vRack")
+![Enable vRack](img/enable_vrack.gif "Enable vRack")
 
 ## Link your project to this new vRack
 
-![Link vRack](data/link_vrack.gif "Link vRack")
+![Link vRack](img/link_vrack.gif "Link vRack")
 
 ## Create ovhrc file
 
@@ -117,15 +117,15 @@ OVH_CONSUMER_KEY="YOUR_CONSUMER_KEY"
 
 ## Order a /28 failover IP block
 
-To do that, you can run the script data/order_ip_block.py
+To do that, you can run the script scripts/order_ip_block.py
 ```sh
-$ python3 order_ip_block.py
+$ python3 scripts/order_ip_block.py
 Please pay the BC 12345678 --> https://www.ovh.com/cgi-bin/order/displayOrder.cgi?orderId=12345678&orderPassword=ABCD
 Done
 ```
 
 Once your BC (Bon de Commande / order) is paid, you should receive a /28 in your manager. You can now move this pool of IP in your vRack by doing so:
-![Add IP in vRack](data/add_ip_vrack.gif "Add IP in vRack")
+![Add IP in vRack](img/add_ip_vrack.gif "Add IP in vRack")
 
 
 # Bootstrap
