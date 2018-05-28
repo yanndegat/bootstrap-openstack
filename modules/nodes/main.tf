@@ -1,21 +1,25 @@
+# query subnets
+data "openstack_networking_subnet_v2" "mgmt_subnet" {
+  subnet_id = "${var.mgmt_subnet_id}"
+}
+
+data "openstack_networking_subnet_v2" "vxlan_subnet" {
+  subnet_id = "${var.vxlan_subnet_id}"
+}
+
+data "openstack_networking_subnet_v2" "storage_subnet" {
+  subnet_id = "${var.storage_subnet_id}"
+}
+
 data "template_file" "systemd_network_files" {
   count = "${var.count}"
 
   template = <<TPL
-# ssh if
-- path: /etc/systemd/network/10-ens3.network
+- path: /etc/systemd/network/20-ens3.network
   permissions: '0644'
   content: |
     [Match]
     Name=ens3
-    [Network]
-    DHCP=ipv4
-
-- path: /etc/systemd/network/20-ens4.network
-  permissions: '0644'
-  content: |
-    [Match]
-    Name=ens4
     [Network]
     DHCP=no
     Bridge=br-mgmt
@@ -33,19 +37,23 @@ data "template_file" "systemd_network_files" {
     [Network]
     DHCP=no
     Address=${element(flatten(openstack_networking_port_v2.mgmt.*.all_fixed_ips), count.index)}
+    DNS=1.1.1.1
     [Route]
     Gateway=${var.internet_gw}
     Destination=0.0.0.0/0
     [Route]
     GatewayOnlink=yes
-    Destination=${var.cidr}
+    Scope=link
+    Source=${data.openstack_networking_subnet_v2.mgmt_subnet.cidr}
+    Destination=${data.openstack_networking_subnet_v2.mgmt_subnet.cidr}
+    Metric=2048
 
 # vxlan if
-- path: /etc/systemd/network/30-ens5.network
+- path: /etc/systemd/network/30-ens4.network
   permissions: '0644'
   content: |
     [Match]
-    Name=ens5
+    Name=ens4
     [Network]
     DHCP=no
     Bridge=br-vxlan
@@ -65,14 +73,17 @@ data "template_file" "systemd_network_files" {
     Address=${element(flatten(openstack_networking_port_v2.vxlan.*.all_fixed_ips), count.index)}
     [Route]
     GatewayOnlink=yes
-    Destination=${var.cidr}
+    Scope=link
+    Source=${data.openstack_networking_subnet_v2.vxlan_subnet.cidr}
+    Destination=${data.openstack_networking_subnet_v2.vxlan_subnet.cidr}
+    Metric=2048
 
 # vlan if
-- path: /etc/systemd/network/40-ens6.network
+- path: /etc/systemd/network/40-ens5.network
   permissions: '0644'
   content: |
     [Match]
-    Name=ens6
+    Name=ens5
     [Network]
     DHCP=no
     Bridge=br-vlan
@@ -84,11 +95,11 @@ data "template_file" "systemd_network_files" {
     Kind=bridge
 
 # storage if
-- path: /etc/systemd/network/50-ens7.network
+- path: /etc/systemd/network/50-ens6.network
   permissions: '0644'
   content: |
     [Match]
-    Name=ens7
+    Name=ens6
     [Network]
     DHCP=no
     Bridge=br-storage
@@ -108,14 +119,17 @@ data "template_file" "systemd_network_files" {
     Address=${element(flatten(openstack_networking_port_v2.storage.*.all_fixed_ips), count.index)}
     [Route]
     GatewayOnlink=yes
-    Destination=${var.cidr}
+    Scope=link
+    Source=${data.openstack_networking_subnet_v2.storage_subnet.cidr}
+    Destination=${data.openstack_networking_subnet_v2.storage_subnet.cidr}
+    Metric=2048
 
 # external port if enabled
-- path: /etc/systemd/network/50-ens8.network
+- path: /etc/systemd/network/50-ens7.network
   permissions: '0644'
   content: |
     [Match]
-    Name=ens8
+    Name=ens7
     [Network]
     DHCP=ipv4
 
@@ -147,7 +161,6 @@ packages:
     - python
 package_update: true
 package_upgrade: true
-package_reboot_if_required: true
 ssh_authorized_keys:
    - ${var.ansible_public_key}
 disable_root: false
@@ -183,6 +196,8 @@ write_files:
 runcmd:
   - systemctl enable sdb.device
   - systemctl enable systemd-networkd.service
+  - echo "source /etc/network/interfaces.d/*.cfg" > /etc/network/interfaces
+  - rm /etc/network/interfaces.d/50-cloud-init.cfg
 power_state:
     mode: reboot
 CLOUDCONFIG
@@ -200,17 +215,6 @@ resource "openstack_networking_port_v2" "ext_port" {
   network_id         = "${data.openstack_networking_network_v2.ext_net.id}"
   admin_state_up     = "true"
   security_group_ids = ["${var.security_group_ids}"]
-}
-
-resource "openstack_networking_port_v2" "ssh" {
-  count          = "${var.count}"
-  name           = "${var.name}_${count.index}_ssh"
-  network_id     = "${var.network_id}"
-  admin_state_up = "true"
-
-  fixed_ip {
-    subnet_id = "${var.ssh_subnet_id}"
-  }
 }
 
 resource "openstack_networking_port_v2" "mgmt" {
@@ -268,11 +272,7 @@ resource "openstack_compute_instance_v2" "internal_nodes" {
   # order matters: see systemd network files
   network {
     access_network = true
-    port           = "${openstack_networking_port_v2.ssh.*.id[count.index]}"
-  }
-
-  network {
-    port = "${openstack_networking_port_v2.mgmt.*.id[count.index]}"
+    port           = "${openstack_networking_port_v2.mgmt.*.id[count.index]}"
   }
 
   network {
@@ -299,11 +299,7 @@ resource "openstack_compute_instance_v2" "external_nodes" {
   # order matters: see systemd network files
   network {
     access_network = true
-    port           = "${openstack_networking_port_v2.ssh.*.id[count.index]}"
-  }
-
-  network {
-    port = "${openstack_networking_port_v2.mgmt.*.id[count.index]}"
+    port           = "${openstack_networking_port_v2.mgmt.*.id[count.index]}"
   }
 
   network {

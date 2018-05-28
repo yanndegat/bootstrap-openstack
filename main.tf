@@ -40,6 +40,8 @@ resource "openstack_networking_secgroup_rule_v2" "in_traffic_lb" {
   direction         = "ingress"
   ethertype         = "IPv4"
   protocol          = "tcp"
+  port_range_min    = 443
+  port_range_max    = 443
   remote_ip_prefix  = "${trimspace(data.http.myip.body)}/32"
   security_group_id = "${openstack_networking_secgroup_v2.lb.id}"
 }
@@ -52,7 +54,7 @@ resource "openstack_networking_secgroup_rule_v2" "in_traffic_ssh" {
   remote_ip_prefix  = "${trimspace(data.http.myip.body)}/32"
   port_range_min    = 22
   port_range_max    = 22
-  security_group_id = "${module.network.bastion_security_group_id}"
+  security_group_id = "${module.network.nat_security_group_id}"
 }
 
 module "network" {
@@ -292,8 +294,56 @@ resource "null_resource" "ansible_setup_hosts" {
   # https://docs.openstack.org/project-deploy-guide/openstack-ansible/latest/run-playbooks.html#run-the-playbooks-to-install-openstack
   provisioner "remote-exec" {
     inline = [
-      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-infrastructure.yml --syntax-check)",
+      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-hosts.yml --syntax-check)",
       "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-hosts.yml)",
+    ]
+  }
+}
+
+resource "null_resource" "ansible_setup_infrastructure" {
+  # Changes to setup hosts triggers re-provisioning infrastructure
+  triggers {
+    setup_hosts_id         = "${null_resource.ansible_setup_hosts.id}"
+  }
+
+  connection {
+    type = "ssh"
+    host = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
+    user = "ubuntu"
+    bastion_host = "${module.network.bastion_public_ip}"
+    bastion_user = "core"
+  }
+
+  # https://docs.openstack.org/project-deploy-guide/openstack-ansible/latest/run-playbooks.html#checking-the-integrity-of-the-configuration-files
+  # https://docs.openstack.org/project-deploy-guide/openstack-ansible/latest/run-playbooks.html#run-the-playbooks-to-install-openstack
+  provisioner "remote-exec" {
+    inline = [
+      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-infrastructure.yml --syntax-check)",
+      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-infrastructure.yml)",
+    ]
+  }
+}
+
+resource "null_resource" "ansible_setup_openstack" {
+  # Changes to setup hosts triggers re-provisioning infrastructure
+  triggers {
+    setup_infrastructure_id         = "${null_resource.ansible_setup_infrastructure.id}"
+  }
+
+  connection {
+    type = "ssh"
+    host = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
+    user = "ubuntu"
+    bastion_host = "${module.network.bastion_public_ip}"
+    bastion_user = "core"
+  }
+
+  # https://docs.openstack.org/project-deploy-guide/openstack-ansible/latest/run-playbooks.html#checking-the-integrity-of-the-configuration-files
+  # https://docs.openstack.org/project-deploy-guide/openstack-ansible/latest/run-playbooks.html#run-the-playbooks-to-install-openstack
+  provisioner "remote-exec" {
+    inline = [
+      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-openstack.yml --syntax-check)",
+      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-openstack.yml)",
     ]
   }
 }
