@@ -49,17 +49,8 @@ global_overrides:
           - neutron_linuxbridge_agent
         container_bridge: "br-vlan"
         container_type: "veth"
-        container_interface: "eth11"
-        type: "vlan"
-        range: "101:200,301:400"
-        net_name: "vlan"
-    - network:
-        group_binds:
-          - neutron_linuxbridge_agent
-        container_bridge: "br-vlan"
-        container_type: "veth"
         container_interface: "eth12"
-        host_bind_override: "eth12"
+        host_bind_override: "ens5"
         type: "flat"
         net_name: "flat"
 
@@ -82,7 +73,7 @@ network_hosts:
 compute_hosts:
   ${compute_hosts}
 
-storage_infra_hosts:
+storage-infra_hosts:
   ${storage_infra_hosts}
 
 storage_hosts:

@@ -7,6 +7,10 @@ data "openstack_networking_subnet_v2" "vxlan_subnet" {
   subnet_id = "${var.vxlan_subnet_id}"
 }
 
+data "openstack_networking_subnet_v2" "vlan_subnet" {
+  subnet_id = "${var.vlan_subnet_id}"
+}
+
 data "openstack_networking_subnet_v2" "storage_subnet" {
   subnet_id = "${var.storage_subnet_id}"
 }
@@ -37,10 +41,12 @@ data "template_file" "systemd_network_files" {
     [Network]
     DHCP=no
     Address=${element(flatten(openstack_networking_port_v2.mgmt.*.all_fixed_ips), count.index)}
-    DNS=1.1.1.1
+    # ovh dns
+    DNS=213.186.33.99
     [Route]
     Gateway=${var.internet_gw}
     Destination=0.0.0.0/0
+    Metric=2048
     [Route]
     GatewayOnlink=yes
     Scope=link
@@ -86,7 +92,10 @@ data "template_file" "systemd_network_files" {
     Name=ens5
     [Network]
     DHCP=no
-    Bridge=br-vlan
+    LinkLocalAddressing=no
+    [Link]
+    MTUBytes=8000
+
 - path: /etc/systemd/network/40-br-vlan.netdev
   permissions: '0644'
   content: |
@@ -132,6 +141,8 @@ data "template_file" "systemd_network_files" {
     Name=ens7
     [Network]
     DHCP=ipv4
+    [DHCP]
+    RouteMetric=1024
 
 TPL
 }
@@ -220,7 +231,7 @@ resource "openstack_networking_port_v2" "ext_port" {
 resource "openstack_networking_port_v2" "mgmt" {
   count          = "${var.count}"
   name           = "${var.name}_${count.index}_mgmt"
-  network_id     = "${var.network_id}"
+  network_id     = "${data.openstack_networking_subnet_v2.mgmt_subnet.network_id}"
   admin_state_up = "true"
 
   fixed_ip {
@@ -231,7 +242,7 @@ resource "openstack_networking_port_v2" "mgmt" {
 resource "openstack_networking_port_v2" "vxlan" {
   count          = "${var.count}"
   name           = "${var.name}_${count.index}_vxlan"
-  network_id     = "${var.network_id}"
+  network_id     = "${data.openstack_networking_subnet_v2.vxlan_subnet.network_id}"
   admin_state_up = "true"
 
   fixed_ip {
@@ -242,7 +253,7 @@ resource "openstack_networking_port_v2" "vxlan" {
 resource "openstack_networking_port_v2" "vlan" {
   count          = "${var.count}"
   name           = "${var.name}_${count.index}_vlan"
-  network_id     = "${var.network_id}"
+  network_id     = "${data.openstack_networking_subnet_v2.vlan_subnet.network_id}"
   admin_state_up = "true"
 
   fixed_ip {
@@ -253,7 +264,7 @@ resource "openstack_networking_port_v2" "vlan" {
 resource "openstack_networking_port_v2" "storage" {
   count          = "${var.count}"
   name           = "${var.name}_${count.index}_storage"
-  network_id     = "${var.network_id}"
+  network_id     = "${data.openstack_networking_subnet_v2.storage_subnet.network_id}"
   admin_state_up = "true"
 
   fixed_ip {

@@ -77,11 +77,8 @@ module "network" {
     # vxlan/tunnel
     "${cidrsubnet(var.cidr, 4, 3)}",
 
-    # vlan
-    "${cidrsubnet(var.cidr, 4, 4)}",
-
     # storage
-    "${cidrsubnet(var.cidr, 4, 5)}",
+    "${cidrsubnet(var.cidr, 4, 4)}",
   ]
 
   enable_nat_gateway           = true
@@ -91,6 +88,28 @@ module "network" {
   key_pair                     = "${openstack_compute_keypair_v2.keypair.name}"
   nat_instance_flavor_name     = "${lookup(var.flavor_names, "nat", var.flavor_name)}"
   bastion_instance_flavor_name = "${lookup(var.flavor_names, "bastion", var.flavor_name)}"
+}
+
+resource "ovh_publiccloud_private_network" "public" {
+  project_id = "${var.project_id}"
+  name       = "${var.name}_public"
+  regions    = ["${var.region}"]
+  vlan_id    = 0
+}
+
+resource "ovh_publiccloud_private_network_subnet" "vlan_cidr" {
+  project_id = "${var.project_id}"
+  network_id = "${ovh_publiccloud_private_network.public.id}"
+  region     = "${var.region}"
+  start      = "${cidrhost(var.vlan_cidr, 1)}"
+  end        = "${cidrhost(var.vlan_cidr, -2)}"
+  network    = "${var.vlan_cidr}"
+  dhcp       = false
+  no_gateway = true
+}
+
+data "openstack_networking_subnet_v2" "vlan_cidr" {
+  cidr = "${ovh_publiccloud_private_network_subnet.vlan_cidr.network}"
 }
 
 # infra hosts will hosts
@@ -108,8 +127,8 @@ module "shared_infra_nodes" {
   ssh_subnet_id      = "${module.network.private_subnets[0]}"
   mgmt_subnet_id     = "${module.network.private_subnets[1]}"
   vxlan_subnet_id    = "${module.network.private_subnets[2]}"
-  vlan_subnet_id     = "${module.network.private_subnets[3]}"
-  storage_subnet_id  = "${module.network.private_subnets[4]}"
+  vlan_subnet_id     = "${data.openstack_networking_subnet_v2.vlan_cidr.id}"
+  storage_subnet_id  = "${module.network.private_subnets[3]}"
   internet_gw        = "${module.network.nat_private_ips[0]}"
   ansible_public_key = "${tls_private_key.deployer.public_key_openssh}"
   flavor_name        = "${lookup(var.flavor_names, "shared", var.flavor_name)}"
@@ -126,8 +145,8 @@ module "compute_nodes" {
   ssh_subnet_id      = "${module.network.private_subnets[0]}"
   mgmt_subnet_id     = "${module.network.private_subnets[1]}"
   vxlan_subnet_id    = "${module.network.private_subnets[2]}"
-  vlan_subnet_id     = "${module.network.private_subnets[3]}"
-  storage_subnet_id  = "${module.network.private_subnets[4]}"
+  vlan_subnet_id     = "${data.openstack_networking_subnet_v2.vlan_cidr.id}"
+  storage_subnet_id  = "${module.network.private_subnets[3]}"
   internet_gw        = "${module.network.nat_private_ips[0]}"
   ansible_public_key = "${tls_private_key.deployer.public_key_openssh}"
   flavor_name        = "${lookup(var.flavor_names, "compute", var.flavor_name)}"
@@ -144,7 +163,7 @@ module "cinder_nodes" {
   mgmt_subnet_id     = "${module.network.private_subnets[1]}"
   vxlan_subnet_id    = "${module.network.private_subnets[2]}"
   vlan_subnet_id     = "${module.network.private_subnets[3]}"
-  storage_subnet_id  = "${module.network.private_subnets[4]}"
+  storage_subnet_id  = "${module.network.private_subnets[3]}"
   internet_gw        = "${module.network.nat_private_ips[0]}"
   ansible_public_key = "${tls_private_key.deployer.public_key_openssh}"
   flavor_name        = "${lookup(var.flavor_names, "compute", var.flavor_name)}"
@@ -163,12 +182,26 @@ module "haproxy_nodes" {
   ssh_subnet_id      = "${module.network.private_subnets[0]}"
   mgmt_subnet_id     = "${module.network.private_subnets[1]}"
   vxlan_subnet_id    = "${module.network.private_subnets[2]}"
-  vlan_subnet_id     = "${module.network.private_subnets[3]}"
-  storage_subnet_id  = "${module.network.private_subnets[4]}"
+  vlan_subnet_id     = "${data.openstack_networking_subnet_v2.vlan_cidr.id}"
+  storage_subnet_id  = "${module.network.private_subnets[3]}"
   internet_gw        = "${module.network.nat_private_ips[0]}"
   ansible_public_key = "${tls_private_key.deployer.public_key_openssh}"
   flavor_name        = "${lookup(var.flavor_names, "haproxy", var.flavor_name)}"
   key_pair           = "${openstack_compute_keypair_v2.keypair.name}"
+}
+
+data "template_file" "openstack_service_config" {
+  template = "${file("openstack_service_config.yml.tpl")}"
+
+  vars {
+    provider_net_name           = "${var.provider_net_name}"
+    provider_net_cidr           = "${var.provider_net_cidr}"
+    provider_dns_server         = "${var.provider_dns_server}"
+    provider_subnet_gw          = "${var.provider_subnet_gw == "" ? cidrhost(var.provider_net_cidr, 1) : var.provider_subnet_gw}"
+    provider_subnet_pool_start  = "${cidrhost(var.provider_net_cidr, 1)}"
+    provider_subnet_pool_end    = "${cidrhost(var.provider_net_cidr, -2)}"
+    provider_subnet_enable_dhcp = "${var.provider_subnet_enable_dhcp ? "yes" : "no"}"
+  }
 }
 
 data "template_file" "openstack_user_config" {
@@ -182,7 +215,6 @@ data "template_file" "openstack_user_config" {
     external_lb_vip_address = "${element(coalescelist(module.haproxy_nodes.ext_ip_v4, module.haproxy_nodes.mgmt_ip_v4), 0)}"
     internal_lb_vip_address = "${element(module.haproxy_nodes.mgmt_ip_v4, 0)}"
 
-
     shared_infra_hosts  = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.shared_infra_nodes.names, module.shared_infra_nodes.access_ip_v4)))}"
     repo_infra_hosts    = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.shared_infra_nodes.names, module.shared_infra_nodes.access_ip_v4)))}"
     os_infra_hosts      = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.shared_infra_nodes.names, module.shared_infra_nodes.access_ip_v4)))}"
@@ -190,8 +222,8 @@ data "template_file" "openstack_user_config" {
     identity_hosts      = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.shared_infra_nodes.names, module.shared_infra_nodes.access_ip_v4)))}"
     network_hosts       = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.shared_infra_nodes.names, module.shared_infra_nodes.access_ip_v4)))}"
 
-    compute_hosts       = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.compute_nodes.names, module.compute_nodes.access_ip_v4)))}"
-    storage_hosts       = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s\n  %s", module.cinder_nodes.names, module.cinder_nodes.access_ip_v4, indent(2, var.cinder_container_vars))))}"
+    compute_hosts = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.compute_nodes.names, module.compute_nodes.access_ip_v4)))}"
+    storage_hosts = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s\n  %s", module.cinder_nodes.names, module.cinder_nodes.access_ip_v4, indent(2, var.cinder_container_vars))))}"
     haproxy_hosts = "${indent(2, join( "\n", formatlist("%s:\n  ip: %s", module.haproxy_nodes.names, module.haproxy_nodes.access_ip_v4)))}"
   }
 }
@@ -243,14 +275,14 @@ resource "openstack_compute_instance_v2" "deployer" {
 resource "null_resource" "provision" {
   # Changes to any instance of the cluster requires re-provisioning
   triggers {
-    template            = "${md5(data.template_file.openstack_user_config.rendered)}"
-    deployer_id         = "${openstack_compute_instance_v2.deployer.id}"
+    template    = "${md5(data.template_file.openstack_user_config.rendered)}"
+    deployer_id = "${openstack_compute_instance_v2.deployer.id}"
   }
 
   connection {
-    type = "ssh"
-    host = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
-    user = "ubuntu"
+    type         = "ssh"
+    host         = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
+    user         = "ubuntu"
     bastion_host = "${module.network.bastion_public_ip}"
     bastion_user = "core"
   }
@@ -283,9 +315,9 @@ resource "null_resource" "ansible_setup_hosts" {
   }
 
   connection {
-    type = "ssh"
-    host = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
-    user = "ubuntu"
+    type         = "ssh"
+    host         = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
+    user         = "ubuntu"
     bastion_host = "${module.network.bastion_public_ip}"
     bastion_user = "core"
   }
@@ -303,13 +335,13 @@ resource "null_resource" "ansible_setup_hosts" {
 resource "null_resource" "ansible_setup_infrastructure" {
   # Changes to setup hosts triggers re-provisioning infrastructure
   triggers {
-    setup_hosts_id         = "${null_resource.ansible_setup_hosts.id}"
+    setup_hosts_id = "${null_resource.ansible_setup_hosts.id}"
   }
 
   connection {
-    type = "ssh"
-    host = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
-    user = "ubuntu"
+    type         = "ssh"
+    host         = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
+    user         = "ubuntu"
     bastion_host = "${module.network.bastion_public_ip}"
     bastion_user = "core"
   }
@@ -319,7 +351,7 @@ resource "null_resource" "ansible_setup_infrastructure" {
   provisioner "remote-exec" {
     inline = [
       "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-infrastructure.yml --syntax-check)",
-      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-infrastructure.yml)",
+#      "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-infrastructure.yml)",
     ]
   }
 }
@@ -327,13 +359,13 @@ resource "null_resource" "ansible_setup_infrastructure" {
 resource "null_resource" "ansible_setup_openstack" {
   # Changes to setup hosts triggers re-provisioning infrastructure
   triggers {
-    setup_infrastructure_id         = "${null_resource.ansible_setup_infrastructure.id}"
+    setup_infrastructure_id = "${null_resource.ansible_setup_infrastructure.id}"
   }
 
   connection {
-    type = "ssh"
-    host = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
-    user = "ubuntu"
+    type         = "ssh"
+    host         = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
+    user         = "ubuntu"
     bastion_host = "${module.network.bastion_public_ip}"
     bastion_user = "core"
   }
@@ -344,6 +376,35 @@ resource "null_resource" "ansible_setup_openstack" {
     inline = [
       "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-openstack.yml --syntax-check)",
       "(cd /opt/openstack-ansible/playbooks && sudo openstack-ansible setup-openstack.yml)",
+    ]
+  }
+}
+
+resource "null_resource" "ansible_service_setup" {
+  triggers {
+    template           = "${md5(data.template_file.openstack_user_config.rendered)}"
+    setup_openstack_id = "${null_resource.ansible_setup_openstack.id}"
+  }
+
+  connection {
+    type         = "ssh"
+    host         = "${openstack_compute_instance_v2.deployer.access_ip_v4}"
+    user         = "ubuntu"
+    bastion_host = "${module.network.bastion_public_ip}"
+    bastion_user = "core"
+  }
+
+  provisioner "file" {
+    content     = "${data.template_file.openstack_service_config.rendered}"
+    destination = "/tmp/openstack_service_config.yml"
+  }
+
+  # https://docs.openstack.org/project-deploy-guide/openstack-ansible/latest/deploymenthost.html#install-the-source-and-dependencies
+  provisioner "remote-exec" {
+    inline = [
+      "sudo git clone -b ${var.version == "latest" ? "master" : format("stable/%s", var.version)} https://github.com/openstack/openstack-ansible-ops.git /opt/openstack-ansible-ops",
+      "(cd /opt/openstack-ansible-ops/multi-node-aio/playbooks && sudo openstack-ansible openstack-service-setup.yml --syntax-check)",
+      "(cd /opt/openstack-ansible-ops/multi-node-aio/playbooks && sudo openstack-ansible openstack-service-setup.yml --extra-vars \"@/tmp/openstack_service_config.yml\")",
     ]
   }
 }
